@@ -8,23 +8,33 @@ import tempfile
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('command', help="the command to execute")  # mandatory
-    parser.add_argument('-c', '--count', default=4, type=int, help="number of times to execute the command")  # optional - default is 4 like in ping, should be changed?
+    parser.add_argument('-c', '--count', default=4, type=int,
+                        help="number of times to execute the command")  # optional
     parser.add_argument('--failed-count', type=int,
                         help="number of allowed failed command invocation attempts before giving up, defaults to 'count' value")  # optional
     parser.add_argument('--sys-trace', action="store_true", help="")  # optional
-    parser.add_argument('--call-trace', action="store_true", help="")  # optional
-    parser.add_argument('--log-trace', action="store_true", help="")  # optional
-    parser.add_argument('--debug', action="store_true", help="")  # optional
+    parser.add_argument('--call-trace', action="store_true",
+                        help="for each failed execution print all the system calls ran by the command")  # optional
+    parser.add_argument('--log-trace', action="store_true",
+                        help="for each failed execution print the command output logs")  # optional
+    parser.add_argument('--debug', action="store_true", help="debug mode")  # optional
     args = parser.parse_args()
     return args
+
+
+def logging_config(debug):
+    if debug:
+        log_level = logging.DEBUG
+    else:
+        log_level = logging.INFO
+    logging.basicConfig(format='%(levelname)s:%(message)s', level=log_level)
 
 
 def build_command(command, strace_log):
     if strace_log:
         final_command = f"strace -o {strace_log.name} {command}"
-        final_command = final_command.split()
     else:
-        final_command = command.split()
+        final_command = command
     return final_command
 
 
@@ -35,13 +45,17 @@ def print_system_calls(strace_log_path):
     file.close()
 
 
+def print_log_trace(execute):
+    print("Failed to execute. printing output logs:")
+    print("stdout:")
+    print(execute.stdout)
+    print("stderr:")
+    print(execute.stderr)
+
+
 def main():
     args = get_args()
-    if args.debug:
-        log_level = logging.DEBUG
-    else:
-        log_level = logging.INFO
-    logging.basicConfig(format='%(levelname)s:%(message)s', level=log_level)
+    logging_config(args.debug)
     if args.call_trace:
         strace_log = tempfile.NamedTemporaryFile()
     else:
@@ -52,7 +66,7 @@ def main():
     try:
         for run in range(1, args.count+1):
             logging.debug('now execute command for the %d time', run)
-            execute = subprocess.run(command)
+            execute = subprocess.run(command, shell=True, text=True, capture_output=args.log_trace)
             if execute.returncode != 0:
                 if failed_count == 0:  # if we reached the max failed attempts break out of the loop and exit.
                     logging.info('i reached max failed attempts, I GIVE UP')
@@ -61,6 +75,8 @@ def main():
                 failed_count -= 1  # decrease the allowed fail until 0 than break
                 if args.call_trace:
                     print_system_calls(strace_log.name)
+                if args.log_trace:
+                    print_log_trace(execute)
             if execute.returncode in return_codes:  # check if return code happened before
                 return_codes[execute.returncode] += 1  # if it was, will increase the key by 1
             else:
