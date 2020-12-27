@@ -4,7 +4,6 @@ import argparse
 import tempfile
 
 
-# DO NOT FORGET TO ADD HELP FOR ARGS!!!!
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('command', help="the command to execute")  # mandatory
@@ -12,7 +11,8 @@ def get_args():
                         help="number of times to execute the command")  # optional
     parser.add_argument('--failed-count', type=int,
                         help="number of allowed failed command invocation attempts before giving up, defaults to 'count' value")  # optional
-    parser.add_argument('--sys-trace', action="store_true", help="")  # optional
+    parser.add_argument('--sys-trace', action="store_true",
+                        help="for each failed execution print logs for Disk IO, Memory, CPU usage and Network")  # optional
     parser.add_argument('--call-trace', action="store_true",
                         help="for each failed execution print all the system calls ran by the command")  # optional
     parser.add_argument('--log-trace', action="store_true",
@@ -38,6 +38,18 @@ def build_command(command, strace_log):
     return final_command
 
 
+def print_sys_trace(disk_log, memory_log, cpu_log, network_log):
+    print("Failed to execute. printing resources logs:")
+    print("Disk IO:")
+    print(disk_log.stdout.read())
+    print("Memory:")
+    print(memory_log.stdout.read())
+    print("CPU usage:")
+    print(cpu_log.stdout.read())
+    print("Network package counters:")
+    print(network_log.stderr.read())
+
+
 def print_system_calls(strace_log_path):
     print("Failed to execute. printing system calls:")
     file = open(strace_log_path, "r")
@@ -46,11 +58,15 @@ def print_system_calls(strace_log_path):
 
 
 def print_log_trace(execute):
-    print("Failed to execute. printing output logs:")
-    print("stdout:")
-    print(execute.stdout)
-    print("stderr:")
-    print(execute.stderr)
+    stdout = execute.stdout.read()
+    stderr = execute.stderr.read()
+    print("Failed to execute. printing available output logs:")
+    if stdout:
+        print("stdout:")
+        print(stdout)
+    if stderr:
+        print("stderr:")
+        print(stderr)
 
 
 def main():
@@ -66,13 +82,27 @@ def main():
     try:
         for run in range(1, args.count+1):
             logging.debug('now execute command for the %d time', run)
-            execute = subprocess.run(command, shell=True, text=True, capture_output=args.log_trace)
+            network_log = subprocess.Popen(f"tcpdump -i any", shell=True, text=True,
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            execute = subprocess.Popen(command, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if args.sys_trace:
+                disk_log = subprocess.Popen(f"pidstat -d -T ALL -p {execute.pid} 1", shell=True, text=True,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                memory_log = subprocess.Popen(f"pidstat -r -T ALL -p {execute.pid} 1", shell=True, text=True,
+                                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                cpu_log = subprocess.Popen(f"pidstat -u -T ALL -p {execute.pid} 1", shell=True, text=True,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            execute.wait()
+            network_log.kill()
+            network_log.wait()
             if execute.returncode != 0:
                 if failed_count == 0:  # if we reached the max failed attempts break out of the loop and exit.
                     logging.info('i reached max failed attempts, I GIVE UP')
                     break
                 logging.debug('command return code is %d', execute.returncode)
                 failed_count -= 1  # decrease the allowed fail until 0 than break
+                if args.sys_trace:
+                    print_sys_trace(disk_log, memory_log, cpu_log, network_log)
                 if args.call_trace:
                     print_system_calls(strace_log.name)
                 if args.log_trace:
