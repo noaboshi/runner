@@ -1,6 +1,7 @@
 import subprocess
 import logging
 import argparse
+import tempfile
 
 
 # DO NOT FORGET TO ADD HELP FOR ARGS!!!!
@@ -18,6 +19,22 @@ def get_args():
     return args
 
 
+def build_command(command, strace_log):
+    if strace_log:
+        final_command = f"strace -o {strace_log.name} {command}"
+        final_command = final_command.split()
+    else:
+        final_command = command.split()
+    return final_command
+
+
+def print_system_calls(strace_log_path):
+    print("Failed to execute. printing system calls:")
+    file = open(strace_log_path, "r")
+    print(file.read())
+    file.close()
+
+
 def main():
     args = get_args()
     if args.debug:
@@ -25,7 +42,11 @@ def main():
     else:
         log_level = logging.INFO
     logging.basicConfig(format='%(levelname)s:%(message)s', level=log_level)
-    command = args.command.split()
+    if args.call_trace:
+        strace_log = tempfile.NamedTemporaryFile()
+    else:
+        strace_log = None
+    command = build_command(args.command, strace_log)
     failed_count = args.failed_count or args.count  # if args.failed_count is none, use the value of args.count
     return_codes = {}  # the dict will be used as  return_code: number of appearances
     try:
@@ -38,17 +59,22 @@ def main():
                     break
                 logging.debug('command return code is %d', execute.returncode)
                 failed_count -= 1  # decrease the allowed fail until 0 than break
+                if args.call_trace:
+                    print_system_calls(strace_log.name)
             if execute.returncode in return_codes:  # check if return code happened before
                 return_codes[execute.returncode] += 1  # if it was, will increase the key by 1
             else:
                 return_codes[execute.returncode] = 1  # if it's the first time, will add to dict
+
     finally:
+        if args.call_trace:
+            strace_log.close()
         sorted_dict = sorted(return_codes.items(), reverse=True, key=lambda code: code[1])  # sort the dict by the values
         if sorted_dict:
             logging.info("the most frequent return code was %d", sorted_dict[0][0])
             return sorted_dict[0][0]  # return the key with the biggest value
         else:
-            logging.error("the command didn't run even once! something bad happened ")
+            logging.error("the command didn't run even once! something bad happened")
 
 
 if __name__ == '__main__':
