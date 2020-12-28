@@ -2,7 +2,7 @@ import subprocess
 import logging
 import argparse
 import tempfile
-
+import os
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -17,6 +17,8 @@ def get_args():
                         help="for each failed execution print all the system calls ran by the command")  # optional
     parser.add_argument('--log-trace', action="store_true",
                         help="for each failed execution print the command output logs")  # optional
+    parser.add_argument('--net-trace', action="store_true",
+                        help="for each failed execution create a 'pcap' file with the network traffic during the execution")  # optional
     parser.add_argument('--debug', action="store_true", help="debug mode")  # optional
     args = parser.parse_args()
     return args
@@ -82,8 +84,12 @@ def main():
     try:
         for run in range(1, args.count+1):
             logging.debug('now execute command for the %d time', run)
-            network_log = subprocess.Popen(f"tcpdump -i any", shell=True, text=True,
-                                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if args.sys_trace or args.net_trace:
+                tcpdump_command = "tcpdump -v -i any"
+                if args.net_trace:
+                    tcpdump_command += f" -w cap_while_{run}_execute.pcap"
+                network_log = subprocess.Popen(tcpdump_command, shell=True, text=True,
+                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             execute = subprocess.Popen(command, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if args.sys_trace:
                 disk_log = subprocess.Popen(f"pidstat -d -T ALL -p {execute.pid} 1", shell=True, text=True,
@@ -93,8 +99,9 @@ def main():
                 cpu_log = subprocess.Popen(f"pidstat -u -T ALL -p {execute.pid} 1", shell=True, text=True,
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             execute.wait()
-            network_log.kill()
-            network_log.wait()
+            if args.sys_trace or args.net_trace:
+                network_log.terminate()
+                network_log.wait()
             if execute.returncode != 0:
                 if failed_count == 0:  # if we reached the max failed attempts break out of the loop and exit.
                     logging.info('i reached max failed attempts, I GIVE UP')
@@ -107,6 +114,8 @@ def main():
                     print_system_calls(strace_log.name)
                 if args.log_trace:
                     print_log_trace(execute)
+            elif args.net_trace and os.path.exists(f"cap_while_{run}_execute.pcap"):
+                os.remove(f"cap_while_{run}_execute.pcap")
             if execute.returncode in return_codes:  # check if return code happened before
                 return_codes[execute.returncode] += 1  # if it was, will increase the key by 1
             else:
